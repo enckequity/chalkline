@@ -1,4 +1,4 @@
-"""Hermes tools for owner proposals and ledger queries."""
+"""Assistant tools for owner proposals and ledger queries."""
 
 import json
 from pathlib import Path
@@ -63,7 +63,7 @@ def media_path(path: str, kind: str) -> Path:
         raise ValueError("Unsupported attachment kind.")
     file = Path(path).resolve(strict=True)
     if not file.is_file() or not file.is_relative_to(roots[kind]().resolve()):
-        raise ValueError("Use an attachment from the current Hermes profile's media cache.")
+        raise ValueError("Use an attachment from the this workspace's media cache.")
     return file
 
 

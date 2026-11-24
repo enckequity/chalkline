@@ -6,14 +6,14 @@ from pathlib import Path
 
 from .. import SLUG
 from ..core import queries, service
-from .identity import dm_phone
+from .identity import CHANNEL, dm_phone
 from .outbound import schedule_delivery
 from .text import customer_text
 
 
 logger = logging.getLogger(__name__)
 CODE = r"A[0-9]+"
-WHATSAPP_APPROVAL = re.compile(rf"(APPROVE|REJECT)[ \t]+({CODE})", re.IGNORECASE | re.ASCII)
+TEXT_APPROVAL = re.compile(rf"(APPROVE|REJECT)[ \t]+({CODE})", re.IGNORECASE | re.ASCII)
 TELEGRAM_APPROVAL = re.compile(rf"\A{re.escape(SLUG)}:(approve|reject):({CODE})\Z")
 
 
@@ -35,7 +35,7 @@ async def _resolve(action, code, actor):
 
 
 async def post_gateway_admission(platform, source, text, **_context):
-    match = WHATSAPP_APPROVAL.fullmatch(text.strip()) if platform == "whatsapp" else None
+    match = TEXT_APPROVAL.fullmatch(text.strip()) if platform == CHANNEL else None
     if not match:
         return None
     try:
@@ -43,7 +43,7 @@ async def post_gateway_admission(platform, source, text, **_context):
         if not phone or not await asyncio.to_thread(queries.is_owner, phone):
             return {"action": "handled"}
     except (Exception, SystemExit):
-        logger.exception("WhatsApp approval identity verification failed.")
+        logger.exception("Text approval identity verification failed.")
         return {"action": "handled"}
     action, code = match.groups()
     return {"action": "handled", "reply": await _resolve(action.lower(), code.upper(), phone)}

@@ -22,7 +22,7 @@ def settings() -> dict:
 
 
 def is_owner(phone: str) -> bool:
-    """Return whether the E.164 WhatsApp sender is configured as an owner."""
+    """Return whether the E.164 SMS sender is configured as an owner."""
     return phone in settings()["owner_phones"]
 
 

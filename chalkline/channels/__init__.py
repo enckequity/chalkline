@@ -1,1 +1,1 @@
-"""WhatsApp intake, owner approvals, and scheduled delivery."""
+"""SMS intake, owner approvals, and scheduled delivery."""

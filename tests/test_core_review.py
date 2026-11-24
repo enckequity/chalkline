@@ -49,6 +49,7 @@ def test_lid_capture_is_reusable_and_bad_display_name_is_safe(ledger):
 
 def test_nested_transport_tokens_in_customer_name_do_not_break_standing_template(ledger):
     job = service.capture_enquiry(CUSTOMER, text="Leaking tap", name="MEDMEDIA:IA:")["job_id"]
+    service.configure({"standing_templates": True}, actor="cli")
     ticket = service.propose_template("enquiry_ack", "Thanks {customer_name}.", actor=OWNER, now=NOW)
     service.approve(ticket["code"], actor=OWNER, now=NOW)
     row = service.enqueue_message("enquiry_ack", CUSTOMER, "", "ack", standing_template="enquiry_ack",
@@ -74,7 +75,7 @@ def test_completion_and_booking_tools_only_propose(ledger):
     from test_core_host import Context
 
     ctx = Context()
-    ctx.observe_turn("whatsapp", OWNER)
+    ctx.observe_turn("sms", OWNER)
     job = job_with_customer()
     number = queries.job_detail(job)["job"]["number"]
     proposal = ctx.call("office_complete", {"job": number, "items": [{"description": "Repair", "unit_price": "20"}]})

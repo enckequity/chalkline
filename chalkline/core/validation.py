@@ -47,6 +47,7 @@ def setup_values(current: dict, changes: dict) -> dict:
         "business_name", "owner_phones", "currency", "locale", "timezone", "hourly_rate",
         "material_billing_rule", "material_markup_pct", "tax_rate", "payment_terms_days",
         "payment_text", "review_link", "digest_time", "telegram_owner_user_id", "telegram_owner_chat_id",
+        "standing_templates",
     }
     unknown = changes.keys() - editable
     if unknown:
@@ -79,6 +80,8 @@ def setup_values(current: dict, changes: dict) -> dict:
         if not 0 <= value <= (100 if key == "tax_rate" else 1000):
             raise ValueError(f"Invalid {key}.")
         result[key] = format(value, "f")
+    if type(result["standing_templates"]) is not bool:
+        raise ValueError("standing_templates must be true or false.")
     days = result["payment_terms_days"]
     if type(days) is not int or not 0 <= days <= 365:
         raise ValueError("Payment terms must be a whole number between 0 and 365 days.")

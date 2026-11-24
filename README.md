@@ -6,6 +6,12 @@
 
 No plugin subscription · Profile-local records · Owner-reviewed customer sends
 
+> **TeamShift fork (`teamshift/4639`).** This branch differs from the upstream text below:
+> - Customer intake, owner `APPROVE`/`REJECT` texts and sends use the engine's official **SMS** gateway platform (`sms`, Twilio), not the unofficial Baileys WhatsApp bridge. Events from the `whatsapp` bridge are ignored. SMS carries text only: a message bound to a quote or invoice PDF is refused (the owner gets a delivery notice and shares the PDF another way), and inbound photos/voice notes are not received over SMS.
+> - Standing templates (enquiry acknowledgement, appointment reminder, review request) are off by default. Turn them on with `/office setup {"standing_templates": true}`; each template text still needs its own owner approval.
+> - `/office setup` never writes the profile `config.yaml`. It reports the `platform_toolsets` the profile needs; provisioning owns the config.
+> - User-facing messages no longer name the host application.
+
 Chalkline is a Hermes back office for a solo tradesperson. Capture enquiries, prepare quote and invoice PDFs, keep receipt evidence, and review follow-ups from the same job ledger. Set your business currency, rates, locale and timezone.
 
 ![Actual dashboard preview using fictional data](docs/assets/demo.gif)

@@ -19,50 +19,48 @@ USAGE = (
     "export <from> <to> | digest"
 )
 SETUP_EXAMPLE = {
-    "restrict_toolsets": True,
     "business_name": "Example Repairs", "owner_phones": ["+12025550101"], "currency": "GBP",
     "locale": "en-GB", "timezone": "Europe/London", "hourly_rate": "65.00",
     "material_billing_rule": "cost", "material_markup_pct": "0", "tax_rate": "0",
     "payment_terms_days": 30, "payment_text": "", "review_link": "", "digest_time": "17:00",
+    "standing_templates": False,
 }
 
 
 def _setup(ctx, raw: str, actor: str) -> dict:
     if actor != "cli":
-        raise PermissionError("Run setup in the Hermes CLI.")
+        raise PermissionError("Run setup from the workspace command line.")
+    from .profile_setup import required_toolsets
+
     if not raw:
         return {"usage": "/office setup <JSON object>", "example": SETUP_EXAMPLE,
-                "settings": queries.settings(), "template_keys": list(TEMPLATES)}
+                "settings": queries.settings(), "template_keys": list(TEMPLATES),
+                "default_templates": DEFAULT_TEMPLATES, "profile": required_toolsets()}
     changes = json.loads(raw)
     if not isinstance(changes, dict):
         raise ValueError("Setup takes a JSON object.")
-    old = queries.settings()
-    templates = changes.pop("templates", DEFAULT_TEMPLATES if not old["business_name"] else {})
-    if not isinstance(templates, dict):
+    # Accepted for compatibility; setup never edits the profile config, so there is nothing to confirm.
+    changes.pop("restrict_toolsets", None)
+    templates = changes.pop("templates", None)
+    if templates is not None and not isinstance(templates, dict):
         raise ValueError("Templates must be an object keyed by template kind.")
-    templates = {kind: template_text(kind, text) for kind, text in templates.items()}
-    from .profile_setup import restrict_toolsets
-
-    confirmed = changes.pop("restrict_toolsets", False)
-    if confirmed is not True:
-        raise ValueError("Confirm restriction to office tools in this dedicated business profile with restrict_toolsets=true.")
-    from hermes_constants import get_hermes_home
-    if get_hermes_home().parent.name != "profiles":
-        raise ValueError("Use a dedicated named business profile.")
+    templates = {kind: template_text(kind, text) for kind, text in templates.items()} if templates else templates
     settings = service.configure(changes, actor=actor)
-    profile = restrict_toolsets(confirmed=True)
+    if templates is None:
+        # Standing templates are off by default. Opting in proposes the defaults for owner approval once.
+        templates = DEFAULT_TEMPLATES if settings["standing_templates"] and not settings["templates"] else {}
     approvals = [service.propose_template(kind, text, actor=actor) for kind, text in templates.items()]
     tick = optional_channel("tick")
     if tick is None:
         schedule = {"status": "channels_unavailable"}
     else:
         schedule = tick.ensure_tick(ctx)
-    return {"settings": settings, "template_approvals": approvals, "tick": schedule, "profile": profile}
+    return {"settings": settings, "template_approvals": approvals, "tick": schedule, "profile": required_toolsets()}
 
 
 def _resolve_code(action: str, code: str, actor: str) -> dict:
     if actor != "cli":
-        raise PermissionError("Use the owner WhatsApp approval text or Telegram approval button.")
+        raise PermissionError("Use the owner SMS approval text or Telegram approval button.")
     if action == "reject":
         return service.reject(code, actor=actor)
     result = service.approve(code, actor=actor)
@@ -102,7 +100,7 @@ def _dispatch(ctx, raw_args: str, actor: str) -> object:
         return service.cancel_job(args[0], actor=actor)
     if action == "receipt-correct":
         if actor != "cli":
-            raise PermissionError("Correct receipt fields from the Hermes CLI.")
+            raise PermissionError("Correct receipt fields from the workspace command line.")
         values = json.loads(raw)
         if not isinstance(values, dict):
             raise ValueError("Receipt correction takes a JSON object.")

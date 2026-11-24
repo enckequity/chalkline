@@ -81,6 +81,7 @@ def test_standing_ack_cooldown_and_template_edit(ledger):
                                        job_id=job, now=now)
 
     assert enqueue("before") is None
+    service.configure({"standing_templates": True}, actor="cli")
     template = service.propose_template("enquiry_ack", "Thanks, {customer_name}.", actor=OWNER, now=NOW)
     service.approve(template["code"], actor="cli", now=NOW)
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -139,3 +140,23 @@ def test_corrected_receipt_approval_requires_exact_fields(ledger):
     service.approve(new["code"], actor=OWNER, now=NOW)
     assert queries.expenses()[0]["amount_minor"] == 2200
     assert queries.expenses()[0]["status"] == "confirmed"
+
+
+def test_standing_templates_default_off_and_turning_them_off_stops_queued_sends(ledger):
+    job = job_with_customer()
+
+    def enqueue(stage):
+        return service.enqueue_message("enquiry_ack", CUSTOMER, "", stage, standing_template="enquiry_ack",
+                                       job_id=job, now=NOW)
+
+    assert queries.settings()["standing_templates"] is False
+    template = service.propose_template("enquiry_ack", "Thanks, {customer_name}.", actor=OWNER, now=NOW)
+    service.approve(template["code"], actor="cli", now=NOW)
+    assert enqueue("approved-but-off") is None
+    service.configure({"standing_templates": True}, actor="cli")
+    queued = enqueue("on")
+    assert queued["status"] == "approved"
+    service.configure({"standing_templates": False}, actor="cli")
+    assert service.claim_outbox(queued["id"], now=NOW) is None
+    with pytest.raises(ValueError, match="standing_templates"):
+        service.configure({"standing_templates": "yes"}, actor="cli")

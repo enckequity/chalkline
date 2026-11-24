@@ -19,8 +19,8 @@ def event(phone=CUSTOMER, *, text="Leaking tap", message_id="msg-1", **fields):
     from gateway.platforms.event import MessageEvent
     from gateway.session import SessionSource
 
-    jid = f"{phone[1:]}@s.whatsapp.net"
-    source = SessionSource(platform=Platform.WHATSAPP, chat_id=jid, user_id=jid, chat_type="dm", user_name="Sarah")
+    platform = fields.pop("platform", Platform.SMS)
+    source = SessionSource(platform=platform, chat_id=phone, user_id=phone, chat_type="dm", user_name="Sarah")
     return MessageEvent(source=source, text=text, message_id=message_id, **fields)
 
 
@@ -40,6 +40,7 @@ def profile(tmp_path, monkeypatch):
 
 
 def _approve_ack():
+    service.configure({"standing_templates": True}, actor="cli")
     proposal = service.propose_template("enquiry_ack", "Thanks {customer_name}. We have your enquiry.", actor="cli")
     service.approve(proposal["code"], actor="cli")
 
@@ -88,11 +89,15 @@ async def test_gateway_captures_customer_with_media_and_never_admits_to_tools(pr
 
 
 @pytest.mark.asyncio
-async def test_frontdesk_drops_non_dm_and_linked_device_echo(profile):
+async def test_frontdesk_drops_non_dm_and_ignores_the_unofficial_whatsapp_bridge(profile):
+    from gateway.config import Platform
+
     group = event(OWNER)
     group.source.chat_type = "group"
     assert await frontdesk.pre_gateway_dispatch(group) == {"action": "skip"}
-    assert await frontdesk.pre_gateway_dispatch(event(OWNER, metadata={"whatsapp_from_owner": True})) == {"action": "skip"}
+    jid = f"{CUSTOMER[1:]}@s.whatsapp.net"
+    bridged = event(jid, platform=Platform.WHATSAPP)
+    assert await frontdesk.pre_gateway_dispatch(bridged) is None
     assert queries.jobs() == []
     profile[1].assert_not_called()
 
@@ -116,29 +121,28 @@ def test_frontdesk_registers_before_optional_approval_handlers_fail():
 
 
 @pytest.mark.asyncio
-async def test_frontdesk_uses_the_bridge_phone_alias_for_a_lid_chat(profile):
-    incoming = event()
-    incoming.source.chat_id = "112233445566778@lid"
-    assert await frontdesk.pre_gateway_dispatch(incoming) == {"action": "skip"}
-    detail = queries.job_detail(queries.jobs()[0]["number"])
-    assert detail["customer"]["phone"] == CUSTOMER
-    assert len(detail["sources"]) == 1
+async def test_sms_sender_must_match_its_chat_and_be_e164(profile):
+    mismatched = event()
+    mismatched.source.chat_id = OWNER
+    assert await frontdesk.pre_gateway_dispatch(mismatched) == {"action": "skip"}
+    lid = event()
+    lid.source.user_id = lid.source.chat_id = "112233445566778@lid"
+    assert await frontdesk.pre_gateway_dispatch(lid) == {"action": "skip"}
+    assert queries.jobs() == []
+    profile[1].assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_lid_only_enquiries_are_captured_and_owner_is_told(profile):
-    _approve_ack()
-    incoming = event()
-    incoming.source.user_id = incoming.source.chat_id = "112233445566778@lid"
-    for message_id in ("lid-first", "lid-second"):
-        incoming.message_id = message_id
-        assert await frontdesk.pre_gateway_dispatch(incoming) == {"action": "skip"}
-    assert len(queries.jobs()) == 1
-    detail = queries.job_detail(queries.jobs()[0]["number"])
-    assert detail["customer"]["phone"] is None
-    assert len(detail["sources"]) == 2
+async def test_enquiry_ack_stays_off_until_the_owner_opts_in(profile):
+    proposal = service.propose_template("enquiry_ack", "Thanks {customer_name}. We have your enquiry.", actor="cli")
+    service.approve(proposal["code"], actor="cli")
+    assert await frontdesk.pre_gateway_dispatch(event(message_id="off-1")) == {"action": "skip"}
     rows = [queries.get_outbox(call.args[0]) for call in profile[1].call_args_list]
-    assert all(row["kind"] == "owner_notice" and "Phone unavailable" in row["body"] for row in rows)
+    assert [row["kind"] for row in rows] == ["owner_notice"]
+    service.configure({"standing_templates": True}, actor="cli")
+    assert await frontdesk.pre_gateway_dispatch(event(message_id="on-1")) == {"action": "skip"}
+    rows = [queries.get_outbox(call.args[0]) for call in profile[1].call_args_list]
+    assert [row["kind"] for row in rows][-1] == "enquiry_ack"
 
 
 @pytest.mark.asyncio
@@ -146,7 +150,7 @@ async def test_multiple_open_jobs_do_not_create_jobs_or_owner_notice_spam(profil
     first = service.capture_owner(actor="cli", name="Sarah", phone=CUSTOMER, text="First open job.")
     second = service.capture_owner(actor="cli", customer_id=first["customer_id"], text="Second open job.")
     bridge = Mock(return_value=("sent", ""))
-    monkeypatch.setattr(outbound, "_send_whatsapp", bridge)
+    monkeypatch.setattr(outbound, "_send_text", bridge)
     monkeypatch.setattr(frontdesk, "schedule_delivery", outbound.deliver_outbox)
     for index in range(3):
         await frontdesk.pre_gateway_dispatch(event(message_id=f"many-open:{index}"))
@@ -206,7 +210,7 @@ async def test_frontdesk_respects_core_ack_window_and_duplicate_events(profile, 
     clock = datetime(2026, 11, 10, 10, tzinfo=timezone.utc)
     real_enqueue = service.enqueue_message
     monkeypatch.setattr(service, "enqueue_message", lambda *args, **kwargs: real_enqueue(*args, **kwargs, now=clock))
-    monkeypatch.setattr(outbound, "_send_whatsapp", Mock(return_value=("sent", "")))
+    monkeypatch.setattr(outbound, "_send_text", Mock(return_value=("sent", "")))
 
     await frontdesk.pre_gateway_dispatch(event(message_id="first"))
     ack = next(row for row in queries.ready_outbox() if row["kind"] == "enquiry_ack")
@@ -227,26 +231,26 @@ async def test_frontdesk_respects_core_ack_window_and_duplicate_events(profile, 
 
 
 @pytest.mark.asyncio
-async def test_whatsapp_approval_requires_owner_sender_and_dm(profile):
+async def test_sms_approval_requires_owner_sender_and_dm(profile):
     pending = service.enqueue_message("other", CUSTOMER, "Test body.", "test:approve")
     code = pending["code"]
     customer, owner = event().source.to_dict(), event(OWNER).source.to_dict()
-    assert await approval_intake.post_gateway_admission("whatsapp", customer, f"APPROVE {code}") == {"action": "handled"}
+    assert await approval_intake.post_gateway_admission("sms", customer, f"APPROVE {code}") == {"action": "handled"}
     assert await approval_intake.post_gateway_admission(
-        "whatsapp", {**owner, "chat_id": customer["chat_id"]}, f"APPROVE {code}",
+        "sms", {**owner, "chat_id": customer["chat_id"]}, f"APPROVE {code}",
     ) == {"action": "handled"}
     assert queries.get_outbox(pending["id"])["status"] == "awaiting_approval"
-    assert await approval_intake.post_gateway_admission("whatsapp", owner, f"please APPROVE {code}") is None
-    approved = await approval_intake.post_gateway_admission("whatsapp", owner, f" approve {code.lower()} ")
+    assert await approval_intake.post_gateway_admission("sms", owner, f"please APPROVE {code}") is None
+    approved = await approval_intake.post_gateway_admission("sms", owner, f" approve {code.lower()} ")
     assert approved["action"] == "handled" and approved["reply"].startswith(code)
     assert approved["reply"].endswith(" · approved")
     assert queries.get_outbox(pending["id"])["status"] == "approved"
-    assert await approval_intake.post_gateway_admission("whatsapp", owner, f"APPROVE {code}") != {
+    assert await approval_intake.post_gateway_admission("sms", owner, f"APPROVE {code}") != {
         "action": "handled", "reply": f"{code} · approved",
     }
     profile[1].assert_called_once_with(pending["id"])
     rejection = service.enqueue_message("other", CUSTOMER, "Other body.", "test:reject")
-    rejected = await approval_intake.post_gateway_admission("whatsapp", owner, f"REJECT {rejection['code']}")
+    rejected = await approval_intake.post_gateway_admission("sms", owner, f"REJECT {rejection['code']}")
     assert rejected["reply"].startswith(rejection["code"]) and rejected["reply"].endswith(" · rejected")
     assert queries.get_outbox(rejection["id"])["status"] == "cancelled"
 

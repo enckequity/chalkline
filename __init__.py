@@ -1,4 +1,4 @@
-"""Hermes entry point for Chalkline."""
+"""Plugin entry point for Chalkline."""
 
 import logging
 

@@ -91,7 +91,7 @@ def ensure_tick(ctx):
     def dispatch(**args):
         result = json.loads(ctx.dispatch_tool("cronjob_manage", args))
         if not result.get("success"):
-            raise RuntimeError(result.get("error") or "Hermes cron could not configure the tick.")
+            raise RuntimeError(result.get("error") or "The scheduler could not configure the tick.")
         return result
 
     # A separate profile-local database provides a process-safe mutex for list/create.

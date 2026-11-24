@@ -33,7 +33,7 @@ class Origin:
 
 
 def _verified_actor(origin: Origin) -> str:
-    if origin.platform == "whatsapp":
+    if origin.platform == "sms":
         identity = optional_channel("identity")
         phone = identity.dm_phone({"user_id": origin.user, "chat_id": origin.chat,
                                    "chat_type": origin.chat_type}) if identity else None
@@ -70,7 +70,7 @@ class OfficeHost:
         self._gateway_seen = True
         self._origin.set(None)
         source = event.source
-        if source is None or (event.metadata or {}).get("whatsapp_from_owner"):
+        if source is None:
             return
         platform = getattr(source.platform, "value", source.platform)
         self._origin.set(Origin(
