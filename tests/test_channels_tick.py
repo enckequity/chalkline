@@ -167,14 +167,19 @@ def test_hermes_no_agent_job_runs_real_channels_against_profile_db(ledger):
         service.claim_outbox(notice["id"], now=now)
         service.finish_outbox(notice["id"], "sent", now=now)
 
-    # The installed tick script imports the plugin from the profile's plugins directory.
-    (ledger / "plugins").mkdir(exist_ok=True)
-    (ledger / "plugins" / "chalkline").symlink_to(Path(__file__).resolve().parents[1], target_is_directory=True)
+    # The plugin is installed outside the profile (as in the image, read-only under the engine).
+    plugin_root = Path(__file__).resolve().parents[1]
+    assert not plugin_root.is_relative_to(ledger) and not (ledger / "plugins").exists()
     ctx = PluginContext(PluginManifest(name="chalkline"), get_plugin_manager())
-    job_id = tick.ensure_tick(ctx)["job_id"]
-    assert tick.ensure_tick(ctx)["job_id"] == job_id
+    created = tick.ensure_tick(ctx)
+    job_id = created["job_id"]
+    assert created["status"] == "created_paused" and created["resume"] == f"hermes cron resume {job_id}"
+    again = tick.ensure_tick(ctx)
+    assert again["job_id"] == job_id and again["resume"] == created["resume"]
     assert len(list_jobs(include_disabled=True)) == 1
     job = get_job(job_id)
+    assert job["state"] == "paused" and job["enabled"] is False
+    assert repr(str(plugin_root)) in (ledger / "scripts" / tick.SCRIPT_NAME).read_text(encoding="utf-8")
     assert job["no_agent"] is True
     assert job["schedule_display"] == "*/15 * * * *"
     assert (ledger / "scripts" / Path(job["script"])).is_file()

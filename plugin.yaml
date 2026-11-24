@@ -21,5 +21,4 @@ provides_hooks:
   - post_gateway_admission
   - pre_llm_call
   - on_session_end
-python_dependencies:
-  - 'fpdf2>=2.8.4,<3'
+# fpdf2>=2.8.4,<3 (with fonttools) is provided by the host image, not declared here.
