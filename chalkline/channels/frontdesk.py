@@ -83,9 +83,14 @@ def _display_name(event):
 
 def _capture_customer(phone, event, *, capture_only=False):
     from ..core import service
+    from ..core.profile_setup import required_toolsets
 
     sender = phone or unresolved_sender(event.source)
     if not sender:
+        return []
+    if not required_toolsets()["ready"]:
+        # Stored customer text later reaches owner turns; never store it in a profile with wider tools.
+        logger.warning("Customer message dropped: the profile is not a dedicated office-only profile.")
         return []
     capture_enquiry = service.capture_enquiry if phone else service.capture_unresolved_enquiry
     args = {"text": event.text or "", "message_id": event.message_id, "name": _display_name(event)}

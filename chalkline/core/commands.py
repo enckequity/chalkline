@@ -30,7 +30,7 @@ SETUP_EXAMPLE = {
 def _setup(ctx, raw: str, actor: str) -> dict:
     if actor != "cli":
         raise PermissionError("Run setup from the workspace command line.")
-    from .profile_setup import required_toolsets
+    from .profile_setup import require_ready, required_toolsets
 
     if not raw:
         return {"usage": "/office setup <JSON object>", "example": SETUP_EXAMPLE,
@@ -39,6 +39,7 @@ def _setup(ctx, raw: str, actor: str) -> dict:
     changes = json.loads(raw)
     if not isinstance(changes, dict):
         raise ValueError("Setup takes a JSON object.")
+    profile = require_ready()
     # Accepted for compatibility; setup never edits the profile config, so there is nothing to confirm.
     changes.pop("restrict_toolsets", None)
     templates = changes.pop("templates", None)
@@ -55,7 +56,7 @@ def _setup(ctx, raw: str, actor: str) -> dict:
         schedule = {"status": "channels_unavailable"}
     else:
         schedule = tick.ensure_tick(ctx)
-    return {"settings": settings, "template_approvals": approvals, "tick": schedule, "profile": required_toolsets()}
+    return {"settings": settings, "template_approvals": approvals, "tick": schedule, "profile": profile}
 
 
 def _resolve_code(action: str, code: str, actor: str) -> dict:

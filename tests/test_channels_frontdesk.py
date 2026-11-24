@@ -24,11 +24,19 @@ def event(phone=CUSTOMER, *, text="Leaking tap", message_id="msg-1", **fields):
     return MessageEvent(source=source, text=text, message_id=message_id, **fields)
 
 
+def provision(home, toolsets=None):
+    import yaml
+
+    surfaces = toolsets or {surface: ["chalkline"] for surface in ("sms", "telegram", "cli", "cron")}
+    (home / "config.yaml").write_text(yaml.safe_dump({"platform_toolsets": surfaces}), encoding="utf-8")
+
+
 @pytest.fixture
 def profile(tmp_path, monkeypatch):
     home = tmp_path / "profiles" / "chalkline-dev"
     home.mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(home))
+    provision(home)
     service.configure({
         "business_name": "Mint Tap Repairs", "owner_phones": [OWNER],
         "telegram_owner_user_id": "42", "telegram_owner_chat_id": "42",
@@ -347,3 +355,17 @@ def test_customer_media_is_capped_per_sender_per_day(profile, monkeypatch):
     sources = queries.job_detail(queries.jobs()[0]["number"])["sources"]
     assert sum(row["kind"] == "photo" for row in sources) == 2
     assert any("daily media limit" in row["text"] for row in sources if row["kind"] == "text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [True, False])
+async def test_intake_stores_nothing_unless_the_profile_is_office_only(profile, extra):
+    home, send = profile
+    if extra:
+        provision(home, {"sms": ["chalkline", "terminal"], "telegram": ["chalkline"],
+                         "cli": ["chalkline"], "cron": ["chalkline"]})
+    else:
+        (home / "config.yaml").unlink()
+    assert await frontdesk.pre_gateway_dispatch(event(message_id="unprovisioned")) == {"action": "skip"}
+    assert queries.jobs() == []
+    send.assert_not_called()
