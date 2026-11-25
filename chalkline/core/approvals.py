@@ -46,10 +46,10 @@ def display_text(text: str) -> str:
     return MEDIA_SYNTAX.sub(lambda match: match.group().replace(":", chr(0x2236)).replace("[", chr(0xff3b)), text)
 
 def message_text(text: str) -> str:
-    """Validate text before passing it to the Hermes transport parser."""
+    """Validate text before passing it to the send transport parser."""
     text = text_field(text, "message body", limit=4000)
     if MEDIA_SYNTAX.search(text):
-        raise ValueError("Message body contains a reserved Hermes media directive.")
+        raise ValueError("Message body contains a reserved media directive.")
     return text
 
 

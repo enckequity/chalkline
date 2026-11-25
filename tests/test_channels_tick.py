@@ -25,11 +25,12 @@ def ledger(tmp_path, monkeypatch):
         "timezone": "Europe/London", "digest_time": "18:00",
         "hourly_rate": "55.00", "payment_terms_days": 0,
     }, actor="cli")
-    monkeypatch.setattr(outbound, "_send_whatsapp", Mock(return_value=("sent", "")))
+    monkeypatch.setattr(outbound, "_send_text", Mock(return_value=("sent", "")))
     return home
 
 
 def _approved_template():
+    service.configure({"standing_templates": True}, actor="cli")
     proposal = service.propose_template(
         "appointment_reminder", "Reminder for {job_number}: {appointment_start}.", actor="cli", now=NOW,
     )
@@ -51,7 +52,7 @@ def _scheduled_job(start, *, as_of=NOW):
     _issue("quote", quote, as_of)
     service.record_quote_decision(quote["id"], "accepted", actor="cli", now=as_of)
     appointment = service.schedule(job, start, start + timedelta(hours=1), actor="cli", now=as_of)
-    outbound._send_whatsapp.reset_mock()
+    outbound._send_text.reset_mock()
     return job, appointment
 
 
@@ -71,7 +72,7 @@ def test_tick_sends_daily_digest_and_standing_reminder_once(ledger):
     assert tick.run_tick(now=NOW + timedelta(minutes=15))["sent"] == 0
     assert tick.run_tick(now=NOW + timedelta(days=1))["sent"] == 1
 
-    calls = outbound._send_whatsapp.call_args_list
+    calls = outbound._send_text.call_args_list
     assert len([call for call in calls if call.args[0] == CUSTOMER]) == 1
     digests = [call.args[1] for call in calls if call.args[1].startswith("Chalkline daily digest")]
     assert len(digests) == 2
@@ -91,7 +92,7 @@ def test_restart_after_bridge_send_before_result_recorded_never_resends(ledger, 
     recovered = tick.run_tick(now=NOW + timedelta(minutes=6))
     assert recovered["sent"] == 0 and recovered["unknown"] == 1
     assert queries.get_outbox(row["id"])["status"] == "unknown"
-    outbound._send_whatsapp.assert_called_once()
+    outbound._send_text.assert_called_once()
 
 
 def test_tick_reminders_follow_reschedule_and_cancel(ledger):
@@ -105,13 +106,13 @@ def test_tick_reminders_follow_reschedule_and_cancel(ledger):
     assert replacement["id"] != original["id"]
     assert queries.get_outbox(stale["id"])["status"] == "cancelled"
     tick.run_tick(now=NOW)
-    assert not any(call.args[0] == CUSTOMER for call in outbound._send_whatsapp.call_args_list)
+    assert not any(call.args[0] == CUSTOMER for call in outbound._send_text.call_args_list)
     assert tick.run_tick(now=new_start - timedelta(hours=24))["sent"] == 1
-    customer_calls = [call for call in outbound._send_whatsapp.call_args_list if call.args[0] == CUSTOMER]
+    customer_calls = [call for call in outbound._send_text.call_args_list if call.args[0] == CUSTOMER]
     assert "2026-11-12 18:00" in customer_calls[0].args[1]
     service.cancel_job(job, actor="cli")
     tick.run_tick(now=new_start - timedelta(minutes=45))
-    assert len([call for call in outbound._send_whatsapp.call_args_list if call.args[0] == CUSTOMER]) == 1
+    assert len([call for call in outbound._send_text.call_args_list if call.args[0] == CUSTOMER]) == 1
 
 
 def test_tick_queues_chaser_then_stops_after_payment(ledger):
@@ -121,7 +122,7 @@ def test_tick_queues_chaser_then_stops_after_payment(ledger):
     service.complete_job(job, actor="cli", items=LABOUR)
     invoice = service.draft_invoice(job, actor="cli", now=issued_at)
     _issue("invoice", invoice, issued_at)
-    outbound._send_whatsapp.reset_mock()
+    outbound._send_text.reset_mock()
 
     first = tick.run_tick(now=NOW)
     assert first["queued"] == 1 and first["sent"] == 0 and first["errors"] == 0
@@ -133,7 +134,7 @@ def test_tick_queues_chaser_then_stops_after_payment(ledger):
     assert not queries.pending_approvals(NOW)
     assert tick.run_tick(now=NOW + timedelta(days=7))["queued"] == 0
     assert tick.run_tick(now=NOW + timedelta(days=23))["queued"] == 0
-    assert not any(call.args[0] == CUSTOMER for call in outbound._send_whatsapp.call_args_list)
+    assert not any(call.args[0] == CUSTOMER for call in outbound._send_text.call_args_list)
 
 
 def test_tick_only_queues_followup_for_the_sent_quote_revision(ledger):
@@ -143,13 +144,13 @@ def test_tick_only_queues_followup_for_the_sent_quote_revision(ledger):
     quote = service.draft_quote(job, LABOUR, actor="cli", now=issued_at)
     assert tick.run_tick(now=NOW)["queued"] == 0
     _issue("quote", quote, issued_at)
-    outbound._send_whatsapp.reset_mock()
+    outbound._send_text.reset_mock()
     assert tick.run_tick(now=NOW)["queued"] == 1
     assert [row["kind"] for row in queries.pending_approvals(NOW)] == ["quote_followup"]
     service.draft_quote(job, LABOUR, actor="cli", now=NOW)
     assert queries.pending_approvals(NOW) == []
     assert tick.run_tick(now=NOW + timedelta(days=4))["queued"] == 0
-    assert not any(call.args[0] == CUSTOMER for call in outbound._send_whatsapp.call_args_list)
+    assert not any(call.args[0] == CUSTOMER for call in outbound._send_text.call_args_list)
 
 
 def test_hermes_no_agent_job_runs_real_channels_against_profile_db(ledger):
@@ -166,11 +167,19 @@ def test_hermes_no_agent_job_runs_real_channels_against_profile_db(ledger):
         service.claim_outbox(notice["id"], now=now)
         service.finish_outbox(notice["id"], "sent", now=now)
 
+    # The plugin is installed outside the profile (as in the image, read-only under the engine).
+    plugin_root = Path(__file__).resolve().parents[1]
+    assert not plugin_root.is_relative_to(ledger) and not (ledger / "plugins").exists()
     ctx = PluginContext(PluginManifest(name="chalkline"), get_plugin_manager())
-    job_id = tick.ensure_tick(ctx)["job_id"]
-    assert tick.ensure_tick(ctx)["job_id"] == job_id
+    created = tick.ensure_tick(ctx)
+    job_id = created["job_id"]
+    assert created["status"] == "created_paused" and created["resume"] == f"hermes cron resume {job_id}"
+    again = tick.ensure_tick(ctx)
+    assert again["job_id"] == job_id and again["resume"] == created["resume"]
     assert len(list_jobs(include_disabled=True)) == 1
     job = get_job(job_id)
+    assert job["state"] == "paused" and job["enabled"] is False
+    assert repr(str(plugin_root)) in (ledger / "scripts" / tick.SCRIPT_NAME).read_text(encoding="utf-8")
     assert job["no_agent"] is True
     assert job["schedule_display"] == "*/15 * * * *"
     assert (ledger / "scripts" / Path(job["script"])).is_file()

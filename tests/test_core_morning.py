@@ -20,6 +20,7 @@ def test_historical_paid_job_cannot_receive_standing_review(ledger):
     job, invoice = invoice_job()
     payment = service.request_payment(invoice["id"], "21", actor=OWNER, now=NOW)
     service.approve(payment["code"], actor=OWNER, now=NOW)
+    service.configure({"standing_templates": True}, actor="cli")
     template = service.propose_template("review_request", "Thanks for your custom.", actor=OWNER, now=NOW)
     service.approve(template["code"], actor=OWNER, now=NOW)
     assert not any(row["kind"] == "review_request" and row["job_id"] == job

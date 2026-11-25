@@ -37,8 +37,8 @@ class Context:
         return json.loads(self.tools[name][0](args, session_id="session-fixture", task_id="task-fixture"))
 
     def observe_turn(self, platform, sender="", kind=MessageType.TEXT, message="fixture-message", chat_type="dm"):
-        if platform == "whatsapp":
-            source = SessionSource(platform=Platform.WHATSAPP, chat_type=chat_type, chat_id=sender,
+        if platform == "sms":
+            source = SessionSource(platform=Platform.SMS, chat_type=chat_type, chat_id=sender,
                                    user_id=sender, message_id=message)
             event = MessageEvent(text="Owner text", source=source, message_type=kind, message_id=message)
             self.hooks["pre_gateway_dispatch"](event)
@@ -49,11 +49,11 @@ def test_customer_cannot_use_tools_or_slash_commands(ledger):
     ctx = Context()
     assert "office_approve" not in ctx.tools
     assert len(ctx.tools) == 13
-    ctx.observe_turn("whatsapp", CUSTOMER)
+    ctx.observe_turn("sms", CUSTOMER)
     result = ctx.call("office_capture", {"name": "Fictional Customer", "text": "New job", "actor": OWNER})
     assert "require the configured owner" in result["error"]
     assert "require the configured owner" in json.loads(ctx.commands["office"]("approve A1"))["error"]
-    ctx.observe_turn("whatsapp", OWNER, chat_type="group")
+    ctx.observe_turn("sms", OWNER, chat_type="group")
     assert "error" in ctx.call("office_query", {"kind": "jobs"})
     assert queries.jobs() == []
 
@@ -67,9 +67,9 @@ def test_payment_requires_observed_owner_text(ledger):
     service.approve(issue["code"], actor="cli")
     args = {"invoice": invoice["number"], "amount": "21.00"}
 
-    ctx.observe_turn("whatsapp", OWNER, MessageType.VOICE, "voice-1")
+    ctx.observe_turn("sms", OWNER, MessageType.VOICE, "voice-1")
     assert "text-only" in ctx.call("office_payment_record", args)["error"]
-    ctx.observe_turn("whatsapp", OWNER, MessageType.TEXT, "text-1")
+    ctx.observe_turn("sms", OWNER, MessageType.TEXT, "text-1")
     assert ctx.call("office_payment_record", args)["code"].startswith("A")
     assert queries.job_detail(job)["payments"] == []
     ctx.hooks["on_session_end"](session_id="session-fixture")

@@ -4,7 +4,7 @@ import logging
 from datetime import timezone
 from pathlib import Path
 
-from .identity import dm_phone, unresolved_sender
+from .identity import CHANNEL, dm_phone, unresolved_sender
 from .text import customer_text
 
 
@@ -78,14 +78,19 @@ def _queue_replies(phone, capture, event, media):
 
 def _display_name(event):
     name = " ".join(str(event.source.user_name or "").split())
-    return customer_text(name)[:200] or "WhatsApp customer (display name unavailable)"
+    return customer_text(name)[:200] or "Customer (display name unavailable)"
 
 
 def _capture_customer(phone, event, *, capture_only=False):
     from ..core import service
+    from ..core.profile_setup import required_toolsets
 
     sender = phone or unresolved_sender(event.source)
     if not sender:
+        return []
+    if not required_toolsets()["ready"]:
+        # Stored customer text later reaches owner turns; never store it in a profile with wider tools.
+        logger.warning("Customer message dropped: the profile is not a dedicated office-only profile.")
         return []
     capture_enquiry = service.capture_enquiry if phone else service.capture_unresolved_enquiry
     args = {"text": event.text or "", "message_id": event.message_id, "name": _display_name(event)}
@@ -95,8 +100,8 @@ def _capture_customer(phone, event, *, capture_only=False):
             args["text"] = (args["text"] + "\n[Attachment not stored: daily media limit reached.]").strip()
         capture = capture_enquiry(sender, media=media, **args)
     except Exception:
-        logger.exception("WhatsApp capture failed with media. Trying text-only capture.")
-        args["text"] = args["text"] or "WhatsApp attachment unavailable."
+        logger.exception("Customer capture failed with media. Trying text-only capture.")
+        args["text"] = args["text"] or "Attachment unavailable."
         args["name"] = None
         capture_enquiry(sender, **args)
         return []
@@ -107,13 +112,10 @@ def _capture_customer(phone, event, *, capture_only=False):
 
 async def _route(event):
     source = event.source
-    if getattr(source.platform, "value", source.platform) != "whatsapp":
+    if getattr(source.platform, "value", source.platform) != CHANNEL:
         return None
     from ..core import queries
 
-    # Linked-device echoes may carry the recipient's ID as their apparent sender.
-    if (event.metadata or {}).get("whatsapp_from_owner"):
-        return SKIP
     phone = dm_phone(source)
     if not phone and not unresolved_sender(source):
         return SKIP
@@ -121,7 +123,7 @@ async def _route(event):
         if phone and await asyncio.to_thread(queries.is_owner, phone):
             return None
     except Exception:
-        logger.exception("WhatsApp owner verification unavailable. Capturing only.")
+        logger.exception("Owner verification unavailable. Capturing only.")
         await asyncio.to_thread(_capture_customer, phone, event, capture_only=True)
         return SKIP
     for outbox_id in await asyncio.to_thread(_capture_customer, phone, event):
@@ -130,7 +132,7 @@ async def _route(event):
 
 
 async def pre_gateway_dispatch(event=None, **_context):
-    """Never let malformed ingress or an optional dependency fail open in Hermes."""
+    """Never let malformed ingress or an optional dependency fail open in the gateway."""
     try:
         return await _route(event)
     except (Exception, SystemExit):

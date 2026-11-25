@@ -22,6 +22,8 @@ DEFAULT_SETTINGS = {
     "review_link": "",
     "digest_time": "17:00",
     "templates": {},
+    # Standing templates send without a per-message approval, so they stay off until the owner opts in.
+    "standing_templates": False,
     "telegram_owner_user_id": None,
     "telegram_owner_chat_id": None,
 }

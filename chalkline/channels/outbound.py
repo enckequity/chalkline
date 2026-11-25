@@ -1,20 +1,15 @@
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from hermes_constants import get_hermes_home
 
-from .. import SLUG
 from ..core import queries, service
-from .identity import PHONE
+from .identity import CHANNEL, PHONE
 
 
 logger = logging.getLogger(__name__)
@@ -35,16 +30,15 @@ def _child_env(root):
     return env
 
 
-def _send_whatsapp(recipient, body, attachment_path=None):
+def _send_text(recipient, body, attachment_path=None):
+    """Send one approved text through the engine's official SMS gateway (`send --to sms:+E164`)."""
     if not PHONE.fullmatch(recipient):
-        return "failed", "Invalid WhatsApp recipient."
-    if MEDIA_SYNTAX.search(body):
-        return "failed", "Message text contains a reserved Hermes media directive."
+        return "failed", "Invalid SMS recipient."
     if attachment_path:
-        path = Path(attachment_path).resolve()
-        if not path.is_file() or path.suffix.lower() != ".pdf" or any(c in str(path) for c in '"\r\n'):
-            return "failed", "PDF attachment is unavailable."
-        body = f'{body}\nMEDIA:"{path.as_posix()}"'
+        # SMS carries text only. Fail closed rather than send the words without the approved PDF.
+        return "failed", "SMS cannot carry the PDF. The document is issued; share it with the customer another way."
+    if MEDIA_SYNTAX.search(body):
+        return "failed", "Message text contains a reserved media directive."
 
     home = get_hermes_home().resolve()
     root = home.parent.parent if home.parent.name == "profiles" else home
@@ -53,35 +47,35 @@ def _send_whatsapp(recipient, body, attachment_path=None):
     elif home.parent == root / "profiles":
         profile = home.name
     else:
-        return "failed", "Unable to resolve the active Hermes profile."
+        return "failed", "Unable to resolve the active workspace profile."
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "hermes_cli.main", "-p", profile, "send", "--to", f"whatsapp:{recipient}", "--json", "--file", "-"],
+            [sys.executable, "-m", "hermes_cli.main", "-p", profile, "send", "--to", f"{CHANNEL}:{recipient}", "--json", "--file", "-"],
             input=body, capture_output=True, encoding="utf-8", errors="replace",
             env=_child_env(root), timeout=SEND_TIMEOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired:
-        return "unknown", "Hermes send timed out."
+        return "unknown", "The workspace send timed out."
     except OSError:
-        return "failed", "Unable to launch the Hermes send CLI."
+        return "failed", "Unable to start the workspace send command."
 
     try:
         payload = json.loads(result.stdout)
     except (TypeError, ValueError):
-        return "unknown", "Hermes exited without a readable delivery result."
+        return "unknown", "The workspace send ended without a readable delivery result."
     if not isinstance(payload, dict):
-        return "unknown", "Hermes returned an unexpected delivery result."
+        return "unknown", "The workspace send returned an unexpected delivery result."
     if result.returncode == 0 and payload.get("success") is True and not payload.get("error"):
         return "sent", ""
     if payload.get("partial_success"):
         return "unknown", "Only part of the approved message was delivered."
     error = str(payload.get("error") or "").strip().lower()
-    # The adapter catches HTTP timeouts and may stringify them as an empty exception.
-    if "timeout" in error or "timed out" in error or error == "whatsapp send failed:":
-        return "unknown", "The WhatsApp bridge timed out."
+    # The standalone SMS sender stringifies exceptions, so a timeout can arrive with an empty detail.
+    if "timeout" in error or "timed out" in error or error == "sms send failed:":
+        return "unknown", "The SMS gateway timed out."
     if error or payload.get("skipped") or payload.get("success") is False:
-        return "failed", "Hermes reported a delivery failure."
-    return "unknown", "Hermes did not confirm delivery."
+        return "failed", "The SMS gateway reported a delivery failure."
+    return "unknown", "The SMS gateway did not confirm delivery."
 
 
 def deliver_outbox(outbox_id, *, now=None):
@@ -93,7 +87,7 @@ def deliver_outbox(outbox_id, *, now=None):
     try:
         outcome, detail = _send_claimed(row)
     except Exception:
-        logger.exception("WhatsApp delivery interrupted for outbox row %s", outbox_id)
+        logger.exception("Delivery interrupted for outbox row %s", outbox_id)
         outcome, detail = "unknown", "Delivery stopped before the result could be recorded."
     service.finish_outbox(outbox_id, outcome, detail=detail, now=now)
     _deliver_notices(outbox_id, now)
@@ -109,22 +103,7 @@ def _deliver_notices(outbox_id, now):
 
 
 def _send_claimed(row):
-    if not row.get("attachment_path"):
-        return _send_whatsapp(row["recipient"], row["body"])
-    source = Path(row["attachment_path"])
-    scratch = get_hermes_home() / "cache" / "scratch"
-    try:
-        scratch.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=f"{SLUG}-", dir=scratch, ignore_cleanup_errors=True) as directory:
-            staged = Path(directory) / source.name
-            shutil.copyfile(source, staged)
-            with staged.open("rb") as document:
-                digest = hashlib.file_digest(document, "sha256").hexdigest()
-            if digest != row["attachment_sha256"]:
-                return "failed", "The approved PDF changed before delivery."
-            return _send_whatsapp(row["recipient"], row["body"], staged)
-    except OSError:
-        return "failed", "The approved PDF could not be staged for delivery."
+    return _send_text(row["recipient"], row["body"], row.get("attachment_path"))
 
 
 def schedule_delivery(outbox_id):

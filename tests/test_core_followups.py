@@ -62,6 +62,7 @@ def test_quote_followup_and_rescheduled_reminder_use_exact_record(ledger):
     service.record_quote_decision(quote["id"], "accepted", actor=OWNER, now=now)
     assert queries.get_outbox(row["id"])["status"] == "cancelled"
     appointment = service.schedule(job, now + timedelta(hours=24), now + timedelta(hours=25), actor=OWNER, now=now)
+    service.configure({"standing_templates": True}, actor="cli")
     template = service.propose_template("appointment_reminder", "Your appointment is {appointment_start}.", actor=OWNER, now=now)
     service.approve(template["code"], actor=OWNER, now=now)
     [action] = queries.due_actions(now)

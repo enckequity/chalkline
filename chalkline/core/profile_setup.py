@@ -1,33 +1,52 @@
-"""Restrict the dedicated business profile to office tools."""
+"""Check the profile configuration the business workspace needs, read-only.
 
-import shutil
+Provisioning owns the profile config. Chalkline never writes config.yaml. Customer
+text is untrusted, so setup and customer intake refuse to run until provisioning has
+put the plugin in a dedicated named profile whose surfaces only carry office tools.
+"""
 
-from hermes_cli.config import get_config_path, load_config, save_config
+from hermes_cli.config import load_config
 from hermes_constants import get_hermes_home
 
 from .. import SLUG
 
-SURFACES = ("whatsapp", "telegram", "cli", "cron")
+SURFACES = ("sms", "telegram", "cli", "cron")
 
 
-def restrict_toolsets(*, confirmed: bool = False) -> dict:
-    """Persist the explicit office-only selection in the active profile's config."""
-    home = get_hermes_home()
-    if home.name == "default" or home.parent.name != "profiles" or not confirmed:
-        raise ValueError("Use a dedicated named business profile and confirm restrict_toolsets=true.")
-    config = load_config()
-    platforms = config.get("platform_toolsets")
-    if platforms is None:
-        platforms = config["platform_toolsets"] = {}
-    if not isinstance(platforms, dict):
-        raise ValueError("platform_toolsets must contain a mapping.")
-    if any(platforms.get(surface) != [SLUG] for surface in SURFACES):
-        for surface in SURFACES:
-            platforms[surface] = [SLUG]
-        path = get_config_path()
-        backup = path.with_suffix(".yaml.bak")
-        if path.exists() and not backup.exists():
-            shutil.copy2(path, backup)
-        # Write only platform_toolsets; merge_existing keeps every other on-disk section as the owner wrote it.
-        save_config({"platform_toolsets": platforms}, merge_existing=True)
-    return {"platform_toolsets": {key: platforms[key] for key in SURFACES}, "restart_required": True}
+def required_toolsets() -> dict:
+    """Compare the active profile with the dedicated, office-only profile Chalkline needs."""
+    try:
+        home = get_hermes_home()
+        dedicated = home.parent.name == "profiles" and home.name != "default"
+    except Exception:
+        dedicated = False
+    try:
+        platforms = load_config().get("platform_toolsets")
+    except Exception:
+        platforms = None
+    platforms = platforms if isinstance(platforms, dict) else {}
+    needed = {surface: [SLUG] for surface in SURFACES}
+    missing = sorted(surface for surface in SURFACES if platforms.get(surface) != [SLUG])
+    return {
+        "platform_toolsets": needed,
+        "missing": missing,
+        "dedicated_profile": dedicated,
+        "ready": dedicated and not missing,
+        "note": ("Provisioning owns the profile config. Run Chalkline in a dedicated named profile "
+                 "(not the default) whose config.yaml sets platform_toolsets to exactly "
+                 + ", ".join(f"{surface}: [{SLUG}]" for surface in SURFACES)
+                 + ". Setup does not edit it."),
+    }
+
+
+def require_ready() -> dict:
+    """Refuse unless provisioning has already isolated and restricted this profile."""
+    report = required_toolsets()
+    if report["ready"]:
+        return report
+    problems = []
+    if not report["dedicated_profile"]:
+        problems.append("the active profile is not a dedicated named profile")
+    if report["missing"]:
+        problems.append("platform_toolsets is not limited to the office tools for: " + ", ".join(report["missing"]))
+    raise ValueError("Setup refused: " + "; ".join(problems) + ". " + report["note"])

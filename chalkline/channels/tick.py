@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 JOB_NAME = f"{SLUG}-tick"
 SCRIPT_NAME = f"{JOB_NAME}.py"
 SCHEDULE = "*/15 * * * *"
+# The directory holding this plugin (the parent of the `chalkline` package), wherever it is installed.
+PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_tick(*, now=None):
@@ -57,14 +59,15 @@ def _install_script():
     directory = hermes_constants.get_hermes_home() / "scripts"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / SCRIPT_NAME
-    content = """# Installed by /office setup.
+    content = f"""# Installed by /office setup.
 import os
 import sys
 from pathlib import Path
 
 home = Path(__file__).resolve().parent.parent
 os.environ["HERMES_HOME"] = str(home)
-sys.path.insert(0, str(home / "plugins" / "chalkline"))
+# The plugin may be installed outside the profile (for example read-only in the image).
+sys.path.insert(0, {str(PLUGIN_ROOT)!r})
 from chalkline.channels.tick import run_tick
 
 result = run_tick()
@@ -91,7 +94,7 @@ def ensure_tick(ctx):
     def dispatch(**args):
         result = json.loads(ctx.dispatch_tool("cronjob_manage", args))
         if not result.get("success"):
-            raise RuntimeError(result.get("error") or "Hermes cron could not configure the tick.")
+            raise RuntimeError(result.get("error") or "The scheduler could not configure the tick.")
         return result
 
     # A separate profile-local database provides a process-safe mutex for list/create.
@@ -104,8 +107,14 @@ def ensure_tick(ctx):
             raise RuntimeError("Multiple Chalkline tick jobs exist in this profile.")
         if jobs:
             job = jobs[0]
-            return {"status": "existing", "job_id": job["job_id"], "job": job}
-        return dispatch(
+            result = {"status": "existing", "job_id": job["job_id"], "job": job}
+            if job.get("state") == "paused" or job.get("enabled") is False:
+                result["resume"] = f"hermes cron resume {job['job_id']}"
+            return result
+        # Scheduled jobs ship paused and opt-in: the owner resumes the tick when ready.
+        created = dispatch(
             action="create", name=JOB_NAME, schedule=SCHEDULE, script=SCRIPT_NAME,
-            no_agent=True, deliver="local",
+            no_agent=True, deliver="local", paused=True,
+            paused_reason="Created paused by /office setup; resume to send scheduled messages.",
         )
+        return created | {"status": "created_paused", "resume": f"hermes cron resume {created['job_id']}"}

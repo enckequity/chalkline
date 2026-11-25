@@ -3,7 +3,6 @@
 import argparse
 import json
 from contextlib import asynccontextmanager, closing
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,8 +25,8 @@ async def test_customer_event_with_media_can_be_silently_consumed(profile):
     from gateway.session import SessionSource
     from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
 
-    customer = "12025550109@s.whatsapp.net"
-    source = SessionSource(platform=Platform.WHATSAPP, chat_id=customer, user_id=customer, chat_type="dm")
+    customer = "+12025550109"
+    source = SessionSource(platform=Platform.SMS, chat_id=customer, user_id=customer, chat_type="dm")
     event = MessageEvent(
         source=source, text="Fictional booking request", message_id="g2-customer",
         media_urls=[str(profile / "receipt.png"), str(profile / "voice.ogg")],
@@ -52,49 +51,37 @@ async def test_customer_event_with_media_can_be_silently_consumed(profile):
     runner._is_user_authorized_for_source.assert_not_called()
 
 
-def test_send_cli_routes_proactive_text_and_pdf_to_mock_bridge(profile, monkeypatch, capsys):
+def test_send_cli_routes_proactive_text_to_the_official_sms_gateway(profile, monkeypatch, capsys):
     from gateway.config import GatewayConfig, Platform, PlatformConfig
     from hermes_cli.send_cmd import cmd_send
-    from tools.registry import registry
 
-    document = profile / "cache" / "scratch" / "fixture.pdf"
-    document.parent.mkdir(parents=True)
-    document.write_bytes(b"%PDF-1.4\n% fictional transport fixture\n%%EOF\n")
-    config = GatewayConfig(platforms={Platform.WHATSAPP: PlatformConfig(enabled=True)})
+    config = GatewayConfig(platforms={Platform.SMS: PlatformConfig(enabled=True)})
     monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
-    monkeypatch.setattr("tools.send_message_tool._mirror_sent_message", lambda *_args: False)
+    for key, value in {"TWILIO_ACCOUNT_SID": "ACfictional", "TWILIO_AUTH_TOKEN": "fictional-token",
+                       "TWILIO_PHONE_NUMBER": "+12025550100"}.items():
+        monkeypatch.setenv(key, value)
     calls = []
 
     @asynccontextmanager
-    async def respond(url, json=None, **_kwargs):
-        endpoint = url.rsplit("/", 1)[-1]
-        calls.append((endpoint, json))
+    async def respond(url, data=None, **_kwargs):
+        calls.append((url.rsplit("/", 1)[-1], {name["name"]: value for name, _headers, value in data._fields}))
 
         async def body():
-            return {"messageId": f"mock-{endpoint}"} if json else {}
+            return {"sid": "SMfictional"}
 
-        yield SimpleNamespace(status=200, json=body)
+        yield SimpleNamespace(status=201, json=body)
 
     @asynccontextmanager
-    async def session():
-        yield SimpleNamespace(get=respond, post=respond)
+    async def session(**_kwargs):
+        yield SimpleNamespace(post=respond)
 
     monkeypatch.setattr("aiohttp.ClientSession", session)
     number = "+12025550109"
-    jid = "12025550109@s.whatsapp.net"
-    assert registry.get_entry("send_message") is None
-    for message in ("Fictional reminder", f'MEDIA:"{document.as_posix()}"'):
-        with pytest.raises(SystemExit) as exit_info:
-            cmd_send(argparse.Namespace(to=f"whatsapp:{number}", message=message, json=True))
-        assert exit_info.value.code == 0, capsys.readouterr()
-        assert json.loads(capsys.readouterr().out)["success"]
-
-    assert [endpoint for endpoint, _ in calls] == ["health", "send", "health", "send-media"]
-    assert calls[1][1] == {"chatId": jid, "message": "Fictional reminder"}
-    assert calls[3][1]["chatId"] == jid
-    assert calls[3][1]["mediaType"] == "document"
-    assert Path(calls[3][1]["filePath"]) == document
-    assert calls[3][1]["fileName"] == document.name
+    with pytest.raises(SystemExit) as exit_info:
+        cmd_send(argparse.Namespace(to=f"sms:{number}", message="Fictional reminder", json=True))
+    assert exit_info.value.code == 0, capsys.readouterr()
+    assert json.loads(capsys.readouterr().out)["success"]
+    assert calls == [("Messages.json", {"From": "+12025550100", "To": number, "Body": "Fictional reminder"})]
 
 
 def test_single_recurring_job_can_dispatch_a_profile_database_tool(profile):

@@ -2,28 +2,23 @@ import re
 from collections.abc import Mapping
 
 
+# Customer intake, owner approvals and sends use the engine's official SMS gateway platform.
+CHANNEL = "sms"
 PHONE = re.compile(r"\+([1-9][0-9]{1,14})")
-PHONE_JID = re.compile(r"([1-9][0-9]{1,14})(?::[0-9]+)?@s\.whatsapp\.net")
-LID = re.compile(r"[0-9]+(?::[0-9]+)?@lid")
 
 
 def dm_phone(source):
-    """Get a phone identity from a direct chat, using the bridge's phone alias."""
+    """Get the E.164 phone identity of a direct SMS chat (sender and chat are the same number)."""
     get = source.get if isinstance(source, Mapping) else lambda field: getattr(source, field, None)
     if get("chat_type") != "dm":
         return None
     sender, chat = get("user_id") or "", get("chat_id") or ""
-    match = PHONE.fullmatch(sender) or PHONE_JID.fullmatch(sender)
-    if not match:
-        return None
-    chat_match = PHONE.fullmatch(chat) or PHONE_JID.fullmatch(chat)
-    if (chat_match and chat_match[1] == match[1]) or LID.fullmatch(chat):
+    match = PHONE.fullmatch(sender)
+    if match and chat == sender:
         return f"+{match[1]}"
     return None
 
 
 def unresolved_sender(source):
-    """Return a stable LID for a direct message whose phone alias is unavailable."""
-    if source.chat_type == "dm" and LID.fullmatch(source.user_id or "") and source.chat_id == source.user_id:
-        return source.user_id
+    """SMS always carries the sender's phone number, so there is no phone-private identity."""
     return None

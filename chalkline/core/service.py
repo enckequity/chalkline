@@ -1,6 +1,6 @@
 """Transactional office writes. Channels provide verified transport identity.
 
-Actor is "cli", an authenticated "dashboard" route, an E.164 WhatsApp number,
+Actor is "cli", an authenticated "dashboard" route, an E.164 SMS number,
 or "telegram:<user_id>:<chat_id>".
 Callers must derive it from trusted metadata.
 """
@@ -34,7 +34,7 @@ class Media(TypedDict):
 def configure(changes: dict, *, actor: str) -> dict:
     """Validate and persist owner-entered setup settings."""
     if actor != "cli":
-        raise PermissionError("Run setup in the Hermes CLI.")
+        raise PermissionError("Run setup from the workspace command line.")
     with connect(write=True) as db:
         current = get_settings(db)
         updated = setup_values(current, changes)
@@ -781,7 +781,7 @@ def _recipient(db: Connection, job_id: int) -> str | None:
 def _render_template(db: Connection, kind: str, job_id: int, related_id: int | None) -> tuple[str, str] | None:
     settings = get_settings(db)
     template = settings["templates"].get(kind)
-    if not template or template["approved_hash"] != payload_hash(template["text"]):
+    if settings["standing_templates"] is not True or not template or template["approved_hash"] != payload_hash(template["text"]):
         return None
     job = row_for(db, "jobs", job_id)
     customer = row_for(db, "customers", job["customer_id"])
@@ -911,7 +911,7 @@ def enqueue_message(
 def enqueue_owner_notice(
     recipient: str, body: str, stage_key: str, *, now: datetime | None = None,
 ) -> dict:
-    """Queue one internal notice addressed to a configured WhatsApp owner."""
+    """Queue one internal notice addressed to a configured owner phone."""
     with connect(write=True) as db:
         require_owner(db, phone_number(recipient), cli=False)
         existing = _get_stage(db, stage_key)
@@ -1087,7 +1087,7 @@ def correct_expense(
 ) -> dict:
     """Apply explicit corrections from the owner's CLI to a proposed receipt."""
     if actor != "cli":
-        raise PermissionError("Correct receipt fields from the Hermes CLI.")
+        raise PermissionError("Correct receipt fields from the workspace command line.")
     with connect(write=True) as db:
         expense = row_for(db, "expenses", expense_id)
         if expense["status"] != "proposed":
